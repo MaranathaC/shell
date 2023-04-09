@@ -5,42 +5,48 @@
 #include <stdlib.h>
 
 #define MAX_LINE 80 /* The maximum length command */
-#define BUF_SIZE 4096
 
-int main(void)
-{
+void splitPipe(char **first, char **second, char input[]) {
+    *first = strtok(input, "|"); // get before |
+    if (*first != NULL) {
+        *second = strtok(NULL, ""); // get after |
+    }
+}
+
+int tokenize(char *args[], char *command) {
+    int num_args = 0;
+    args[num_args] = strtok(command, " ");
+    while (num_args < 39 && args[num_args] != NULL) {
+        args[++num_args] = strtok(NULL, " ");
+    }
+
+    args[MAX_LINE/2] = NULL;
+    return num_args;
+}
+
+void execPipe(char *args1[], char *args2[]) {
+
+}
+
+int main(void) {
     char *args[MAX_LINE/2 + 1]; /* command line arguments */
     char *pArgs[MAX_LINE/2 + 1];
-    char *currArgs[MAX_LINE/2 + 1];
+    char *pSecond[MAX_LINE/2 + 1];
     int num_p_args = 0;
+    int num_p_sec;
 
     while (1) {
         printf("osh>");
         fflush(stdout);
 
         char input[1024];
-        fgets(input, 1024, stdin);
-        input[strcspn(input, "\n")] = 0;
+        fgets(input, 1024, stdin); // get line
+        input[strcspn(input, "\n")] = 0; // replace \n with eol
 
-        char *first = strtok(input, "|");
-        char *second;
-        if (first != NULL) {
-            second = strtok(NULL, "");
-            printf("Sec: %s\n", second);
-        }
+        char *first, *second;
+        splitPipe(&first, &second, input); // first get string before, and second get after |
 
-        char *command = strtok(input, ">");
-        char *outputFile;
-        if (command != NULL) {
-            outputFile = strtok(NULL, ""); // Get the remaining part of the string after ">"
-            printf("Output: %s\n", outputFile);
-        }
-
-        int num_args = 0;
-        args[num_args] = strtok(command, " ");
-        while (num_args < 39 && args[num_args] != NULL) {
-            args[++num_args] = strtok(NULL, " ");
-        }
+        int num_args = tokenize(args, first); // args get strings in command
         if (num_args == 0) {
             continue;
         }
@@ -64,6 +70,7 @@ int main(void)
         int status;
 
         if (pid > 0) {
+            wait(&status);
             int cmp = strcmp(args[0], "!!");
 
             if (cmp != 0 || num_args > 1) { // free when not "!!"
@@ -79,7 +86,11 @@ int main(void)
             }
 
         } else if (pid == 0) {
-            if (strlen(second) >= 1) {
+
+            if (second != NULL && strlen(second) >= 1) {
+                char *args2[MAX_LINE/2 + 1];
+                tokenize(args2, second);
+
                 enum {READ, WRITE};
                 int pipeFD[2];
 
@@ -87,11 +98,19 @@ int main(void)
                     perror("Error in creating pipe");
                     continue;
                 }
+
                 pid_t pid2 = fork();
 
                 if (pid2 > 0) {
+                    wait(NULL);
+                    close(pipeFD[WRITE]);
+                    dup2(pipeFD[READ], 0);
+                    execvp(args2[0], args2);
 
                 } else if (pid2 == 0) {
+                    close(pipeFD[READ]);
+                    dup2(pipeFD[WRITE], 1);
+                    execvp(args[0], args);
 
                 } else {
                     printf("FORK FAILED");
