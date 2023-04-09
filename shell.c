@@ -25,15 +25,39 @@ int tokenize(char *args[], char *command) {
 }
 
 void execPipe(char *args1[], char *args2[]) {
+    enum {READ, WRITE};
+    int pipeFD[2];
 
+    if (pipe(pipeFD) < 0) {
+        perror("Error in creating pipe");
+        return;
+    }
+
+    pid_t pid2 = fork();
+
+    if (pid2 > 0) {
+        wait(NULL);
+        close(pipeFD[WRITE]);
+        dup2(pipeFD[READ], 0);
+        execvp(args2[0], args2);
+
+    } else if (pid2 == 0) {
+        close(pipeFD[READ]);
+        dup2(pipeFD[WRITE], 1);
+        execvp(args1[0], args1);
+
+    } else {
+        perror("FORK FAILED");
+    }
 }
 
 int main(void) {
     char *args[MAX_LINE/2 + 1]; /* command line arguments */
+    char *args2[MAX_LINE/2 + 1];
     char *pArgs[MAX_LINE/2 + 1];
-    char *pSecond[MAX_LINE/2 + 1];
+    char *pArgs2[MAX_LINE/2 + 1];
     int num_p_args = 0;
-    int num_p_sec;
+    int num_p_args2 = 0;
 
     while (1) {
         printf("osh>");
@@ -50,7 +74,10 @@ int main(void) {
         if (num_args == 0) {
             continue;
         }
-        args[40] = NULL;
+        args[MAX_LINE/2] = NULL;
+
+        int num_args2 = tokenize(args2, second);
+        args2[MAX_LINE/2] = NULL;
 
         /**
         * After reading user input, the steps are:
@@ -62,6 +89,9 @@ int main(void) {
         if (strcmp(args[0], "exit") == 0 && num_args == 1) {
             for (int i = 0; i < num_p_args; i++) {
                 free(pArgs[i]);
+            }
+            for (int i = 0; i < num_p_args2; i++) {
+                free(pArgs2[i]);
             }
             break;
         }
@@ -77,57 +107,44 @@ int main(void) {
                 for (int i = 0; i < num_p_args; i++) {
                     free(pArgs[i]);
                 }
+
+                for (int i =0; i < num_p_args2; i++) {
+                    free(pArgs2[i]);
+                }
+
+                // copy args
                 num_p_args = num_args;
                 for (int i = 0; i < num_args; i++) {
                     pArgs[i] = malloc(strlen(args[i]) + 1);
                     strcpy(pArgs[i], args[i]);
                 }
                 pArgs[num_args] = NULL;
+
+                // copy args2
+                num_p_args2 = num_args2;
+                for (int i = 0; i < num_args2; i++) {
+                    pArgs2[i] = malloc(strlen(args2[i]) + 1);
+                    strcpy(pArgs2[i], args2[i]);
+                }
+                pArgs2[num_args2] = NULL;
             }
 
         } else if (pid == 0) {
-
-            if (second != NULL && strlen(second) >= 1) {
-                char *args2[MAX_LINE/2 + 1];
-                tokenize(args2, second);
-
-                enum {READ, WRITE};
-                int pipeFD[2];
-
-                if (pipe(pipeFD) < 0) {
-                    perror("Error in creating pipe");
-                    continue;
-                }
-
-                pid_t pid2 = fork();
-
-                if (pid2 > 0) {
-                    wait(NULL);
-                    close(pipeFD[WRITE]);
-                    dup2(pipeFD[READ], 0);
-                    execvp(args2[0], args2);
-
-                } else if (pid2 == 0) {
-                    close(pipeFD[READ]);
-                    dup2(pipeFD[WRITE], 1);
-                    execvp(args[0], args);
-
-                } else {
-                    printf("FORK FAILED");
-                }
+            if (second != NULL && num_args2 >= 1) {
+                execPipe(args, args2);
             }
 
             if (strcmp(args[0], "!!") == 0 && num_args == 1) {
                 if (execvp(pArgs[0], pArgs) == -1) {
-                    printf("!! FAILED\n");
+                    perror("!! FAILED\n");
                 }
             }
             else if (execvp(args[0], args) == -1) {
-                printf("EXEC FAILED\n");
+                perror("EXEC FAILED\n");
             }
 
         } else {
-            printf("FORK FAILED");
+            perror("FORK FAILED");
             return -1;
         }
     }
