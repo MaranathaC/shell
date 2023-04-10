@@ -51,11 +51,29 @@ void execPipe(char *args1[], char *args2[]) {
     }
 }
 
+int splitFile(char input[], FILE **toFile, FILE **fromFile) {
+    char *to = strtok(input, ">");
+    char *from = strtok(input, "<");
+    if (to != NULL) {
+        *toFile = fopen(to, "w");
+    }
+    if (from != NULL) {
+        *fromFile = fopen(from, "r");
+        if (*fromFile == NULL) {
+            perror("No such file or directory");
+            return -1;
+        }
+    }
+    return 0;
+}
+
 int main(void) {
     char *args[MAX_LINE/2 + 1]; /* command line arguments */
     char *args2[MAX_LINE/2 + 1];
     char *pArgs[MAX_LINE/2 + 1];
     char *pArgs2[MAX_LINE/2 + 1];
+    FILE *toFile;
+    FILE *fromFile;
     int num_p_args = 0;
     int num_p_args2 = 0;
 
@@ -63,14 +81,23 @@ int main(void) {
         printf("osh>");
         fflush(stdout);
 
+        toFile = NULL;
+        fromFile = NULL;
+
         char input[1024];
         fgets(input, 1024, stdin); // get line
         input[strcspn(input, "\n")] = 0; // replace \n with eol
+
+        int success = splitFile(input, &toFile, &fromFile);
+        if (success == -1) {
+            continue;
+        }
 
         char *first, *second;
         splitPipe(&first, &second, input); // first get string before, and second get after |
 
         int num_args = tokenize(args, first); // args get strings in command
+
         if (num_args == 0) {
             continue;
         }
@@ -133,15 +160,19 @@ int main(void) {
             if (second != NULL && num_args2 >= 1) {
                 execPipe(args, args2);
             }
-
-            if (strcmp(args[0], "!!") == 0 && num_args == 1) {
-                if (execvp(pArgs[0], pArgs) == -1) {
+            else if (strcmp(args[0], "!!") == 0 && num_args == 1) {
+                if (num_p_args == 0) {
+                    printf("No commands in history\n");
+                }
+                else if (execvp(pArgs[0], pArgs) == -1) {
                     perror("!! FAILED\n");
                 }
             }
             else if (execvp(args[0], args) == -1) {
                 perror("EXEC FAILED\n");
             }
+
+            exit(0);
 
         } else {
             perror("FORK FAILED");
