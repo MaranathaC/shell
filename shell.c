@@ -45,26 +45,46 @@ void execPipe(char *args1[], char *args2[]) {
         close(pipeFD[READ]);
         dup2(pipeFD[WRITE], 1);
         execvp(args1[0], args1);
-
+        exit(0);
     } else {
         perror("FORK FAILED");
     }
 }
 
-int splitFile(char input[], FILE **toFile, FILE **fromFile) {
-    char *to = strtok(input, ">");
-    char *from = strtok(input, "<");
-    if (to != NULL) {
-        *toFile = fopen(to, "w");
+void trim(char *str) {
+    size_t len = strlen(str); // Length of the input string
+    size_t start, end; // Start and end positions of the trimmed string
+
+    // Find the start position of the trimmed string
+    start = strspn(str, " \t"); // Skip leading spaces and tabs
+
+    // Find the end position of the trimmed string
+    end = len - 1;
+    while (end > start && (str[end] == ' ' || str[end] == '\t')) {
+        end--; // Skip trailing spaces and tabs
     }
-    if (from != NULL) {
-        *fromFile = fopen(from, "r");
-        if (*fromFile == NULL) {
-            perror("No such file or directory");
-            return -1;
-        }
+
+    // Move the trimmed string to the beginning of the input string
+    if (end > start) {
+        memmove(str, &str[start], end - start + 1);
     }
-    return 0;
+
+    // Null-terminate the trimmed string
+    str[end - start + 1] = '\0';
+}
+
+void splitTo(char input[], char **command, FILE **toFile) {
+    *command = strtok(input, ">");
+    char *to = strtok(NULL, ">");
+    trim(to);
+    *toFile = fopen(to, "w");
+}
+
+void splitFrom(char input[], char **command, FILE **fromFile) {
+    *command = strtok(input, "<");
+    char *from = strtok(NULL, "<");
+    trim(from);
+    *fromFile = fopen(from, "r");
 }
 
 int main(void) {
@@ -72,39 +92,59 @@ int main(void) {
     char *args2[MAX_LINE/2 + 1];
     char *pArgs[MAX_LINE/2 + 1];
     char *pArgs2[MAX_LINE/2 + 1];
-    FILE *toFile;
-    FILE *fromFile;
+    FILE *toFile = NULL;
+    FILE *fromFile = NULL;
     int num_p_args = 0;
     int num_p_args2 = 0;
+    int pIndicator = -1;
 
     while (1) {
         printf("osh>");
         fflush(stdout);
 
-        toFile = NULL;
-        fromFile = NULL;
-
         char input[1024];
         fgets(input, 1024, stdin); // get line
         input[strcspn(input, "\n")] = 0; // replace \n with eol
 
-        int success = splitFile(input, &toFile, &fromFile);
-        if (success == -1) {
-            continue;
+        char *command = NULL;
+
+        int indicator = -1;
+        for (int i = 0; input[i] != '\0'; i++) {
+            if (input[i] == '>') {
+                indicator = 0;
+                pIndicator = 0;
+                splitTo(input, &command, &toFile);
+                break;
+            } else if (input[i] == '<') {
+                indicator = 1;
+                pIndicator = 1;
+                splitFrom(input, &command, &fromFile);
+                break;
+            }
         }
 
-        char *first, *second;
-        splitPipe(&first, &second, input); // first get string before, and second get after |
+        int num_args = 0, num_args2 = 0;
+        char *first = NULL, *second = NULL;
 
-        int num_args = tokenize(args, first); // args get strings in command
+        if (command != NULL) {
+            num_args = tokenize(args, command);
+        } else {
+            pIndicator = -1;
+
+            splitPipe(&first, &second, input); // first get string before, and second get after |
+
+            num_args = tokenize(args, first); // args get strings in command
+
+            num_args2 = tokenize(args2, second);
+        }
 
         if (num_args == 0) {
             continue;
         }
-        args[MAX_LINE/2] = NULL;
 
-        int num_args2 = tokenize(args2, second);
-        args2[MAX_LINE/2] = NULL;
+        if (strcmp(args[num_args - 1], "&") == 1 || (num_args2 > 0 && strcmp(args2[num_args2 - 1], "&") == 1)) {
+
+        }
 
         /**
         * After reading user input, the steps are:
@@ -122,6 +162,8 @@ int main(void) {
             }
             break;
         }
+
+
 
         pid_t pid = fork();
         int status;
@@ -157,19 +199,45 @@ int main(void) {
             }
 
         } else if (pid == 0) {
-            if (second != NULL && num_args2 >= 1) {
+            if (indicator == 0) {
+                if (toFile == NULL) {
+                    perror("No such file or directory");
+                }
+                dup2(fileno(toFile), 1);
+                execvp(args[0], args);
+            }
+            else if (indicator == 1) {
+                if (fromFile == NULL) {
+                    perror("No such file or directory");
+                }
+                dup2(fileno(fromFile), 0);
+                execvp(args[0], args);
+            }
+            else if (second != NULL && num_args2 >= 1) {
                 execPipe(args, args2);
             }
             else if (strcmp(args[0], "!!") == 0 && num_args == 1) {
                 if (num_p_args == 0) {
                     printf("No commands in history\n");
                 }
-                else if (execvp(pArgs[0], pArgs) == -1) {
-                    perror("!! FAILED\n");
+                else if (pIndicator == 0) {
+                    dup2(fileno(toFile), 1);
+                    execvp(args[0], args);
+                }
+                else if (pIndicator == 1) {
+                    dup2(fileno(fromFile), 0);
+                    execvp(args[0], args);
+                }
+                else {
+                    if (execvp(pArgs[0], pArgs) == -1) {
+                        perror("!! FAILED\n");
+                    }
                 }
             }
-            else if (execvp(args[0], args) == -1) {
-                perror("EXEC FAILED\n");
+            else {
+                if (execvp(args[0], args) == -1) {
+                    perror("EXEC FAILED\n");
+                }
             }
 
             exit(0);
