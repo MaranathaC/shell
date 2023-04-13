@@ -24,6 +24,14 @@ int tokenize(char *args[], char *command) {
     return num_args;
 }
 
+void removeQuotes(char *str) {
+    int len = strlen(str);
+    if (len >= 2 && str[0] == '"' && str[len-1] == '"') {
+        memmove(str, str+1, len-2);
+        str[len-2] = '\0';
+    }
+}
+
 void execPipe(char *args1[], char *args2[]) {
     enum {READ, WRITE};
     int pipeFD[2];
@@ -39,6 +47,9 @@ void execPipe(char *args1[], char *args2[]) {
         wait(NULL);
         close(pipeFD[WRITE]);
         dup2(pipeFD[READ], 0);
+        if (strcmp(args2[0], "grep") == 0 && args2[1] != NULL) {
+            removeQuotes(args2[1]);
+        }
         execvp(args2[0], args2);
 
     } else if (pid2 == 0) {
@@ -97,14 +108,24 @@ int main(void) {
     int num_p_args = 0;
     int num_p_args2 = 0;
     int pIndicator = -1;
+    char pInput[1024];
 
     while (1) {
         printf("osh>");
         fflush(stdout);
 
         char input[1024];
+        char temp[1024];
         fgets(input, 1024, stdin); // get line
         input[strcspn(input, "\n")] = 0; // replace \n with eol
+        strcpy(temp, input);
+
+        trim(input);
+
+        int async = (strlen(input) >= 4 && input[strlen(input) - 1] == '&');
+        if (async != 0) {
+            input[strlen(input) - 1] = '\0';
+        }
 
         char *command = NULL;
 
@@ -129,8 +150,6 @@ int main(void) {
         if (command != NULL) {
             num_args = tokenize(args, command);
         } else {
-            pIndicator = -1;
-
             splitPipe(&first, &second, input); // first get string before, and second get after |
 
             num_args = tokenize(args, first); // args get strings in command
@@ -140,10 +159,6 @@ int main(void) {
 
         if (num_args == 0) {
             continue;
-        }
-
-        if (strcmp(args[num_args - 1], "&") == 1 || (num_args2 > 0 && strcmp(args2[num_args2 - 1], "&") == 1)) {
-
         }
 
         /**
@@ -163,16 +178,19 @@ int main(void) {
             break;
         }
 
-
-
         pid_t pid = fork();
         int status;
 
         if (pid > 0) {
-            wait(&status);
+            if (async != 1) {
+                wait(&status);
+            }
             int cmp = strcmp(args[0], "!!");
 
             if (cmp != 0 || num_args > 1) { // free when not "!!"
+                strcpy(pInput, temp);
+                pIndicator = indicator;
+
                 for (int i = 0; i < num_p_args; i++) {
                     free(pArgs[i]);
                 }
@@ -200,44 +218,61 @@ int main(void) {
 
         } else if (pid == 0) {
             if (indicator == 0) {
-                if (toFile == NULL) {
-                    perror("No such file or directory");
+                if (toFile != NULL) {
+                    dup2(fileno(toFile), 1);
+                    execvp(args[0], args);
+                } else {
+                    perror("Error");
                 }
-                dup2(fileno(toFile), 1);
-                execvp(args[0], args);
             }
             else if (indicator == 1) {
-                if (fromFile == NULL) {
-                    perror("No such file or directory");
+                if (fromFile != NULL) {
+                    dup2(fileno(fromFile), 0);
+                    execvp(args[0], args);
+                } else {
+                    perror("Error");
                 }
-                dup2(fileno(fromFile), 0);
-                execvp(args[0], args);
             }
             else if (second != NULL && num_args2 >= 1) {
                 execPipe(args, args2);
             }
             else if (strcmp(args[0], "!!") == 0 && num_args == 1) {
+                if (num_p_args != 0) {
+                    for (int i = 0; pInput[i] != '\0'; i++) {
+                        printf("%c", pInput[i]);
+                    }
+                    printf("\n");
+                }
                 if (num_p_args == 0) {
                     printf("No commands in history\n");
                 }
                 else if (pIndicator == 0) {
-                    dup2(fileno(toFile), 1);
-                    execvp(args[0], args);
+                    if (toFile != NULL) {
+                        ftruncate(fileno(toFile), 0);
+                        dup2(fileno(toFile), 1);
+                        execvp(pArgs[0], pArgs);
+                    } else {
+                        perror("Error");
+                    }
                 }
                 else if (pIndicator == 1) {
-                    dup2(fileno(fromFile), 0);
-                    execvp(args[0], args);
+                    if (fromFile != NULL) {
+                        fseek(fromFile, 0, SEEK_SET);
+                        dup2(fileno(fromFile), 0);
+                        execvp(pArgs[0], pArgs);
+                    } else {
+                        perror("Error");
+                    }
+                }
+                else if (num_p_args2 > 0) {
+                    execPipe(pArgs, pArgs2);
                 }
                 else {
-                    if (execvp(pArgs[0], pArgs) == -1) {
-                        perror("!! FAILED\n");
-                    }
+                    execvp(pArgs[0], pArgs);
                 }
             }
             else {
-                if (execvp(args[0], args) == -1) {
-                    perror("EXEC FAILED\n");
-                }
+                execvp(args[0], args);
             }
 
             exit(0);
