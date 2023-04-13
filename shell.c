@@ -109,8 +109,13 @@ int main(void) {
     int num_p_args2 = 0;
     int pIndicator = -1;
     char pInput[1024];
+    pid_t bg_pid = -1;
 
     while (1) {
+        pid_t exited = waitpid(bg_pid, NULL, WNOHANG);
+        if (exited > 0) {
+            fflush(stdout);
+        }
         printf("osh>");
         fflush(stdout);
 
@@ -179,11 +184,12 @@ int main(void) {
         }
 
         pid_t pid = fork();
-        int status;
 
         if (pid > 0) {
             if (async != 1) {
-                wait(&status);
+                wait(NULL);
+            } else {
+                bg_pid = pid;
             }
             int cmp = strcmp(args[0], "!!");
 
